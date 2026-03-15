@@ -74,7 +74,11 @@ function hasSignal(text: string) {
   return STRONG_SIGNALS.some((term) => lower.includes(term));
 }
 
-function getRecentCountryEvents(events: CommentEvent[], country: Country, minutes = 20) {
+function getRecentCountryEvents(
+  events: CommentEvent[],
+  country: Country,
+  minutes = 20
+) {
   return events.filter((event) => {
     if (event.source !== "reddit") return false;
     if (event.country !== country) return false;
@@ -88,7 +92,11 @@ function getRecentCountryEvents(events: CommentEvent[], country: Country, minute
   });
 }
 
-function getRecentCountrySignalEvents(events: CommentEvent[], country: Country, minutes = 20) {
+function getRecentCountrySignalEvents(
+  events: CommentEvent[],
+  country: Country,
+  minutes = 20
+) {
   return getRecentCountryEvents(events, country, minutes).filter((event) => {
     if (!event.text) return false;
     if (isPastOrIrrelevant(event.text)) return false;
@@ -110,20 +118,28 @@ function mapAIConfidence(confidence: number): "Low" | "Medium" | "High" {
   return "Low";
 }
 
-function scoreFromAI(status: "Quiet" | "Suspicious" | "Being attacked", confidence: number) {
+function scoreFromAI(
+  status: "Quiet" | "Suspicious" | "Being attacked",
+  confidence: number
+) {
   const base =
-    status === "Being attacked" ? 90 :
-    status === "Suspicious" ? 55 :
-    10;
+    status === "Being attacked"
+      ? 90
+      : status === "Suspicious"
+      ? 55
+      : 10;
 
-  return Math.max(0, Math.min(100, Math.round(base * confidence + (status !== "Quiet" ? 8 : 0))));
+  return Math.max(
+    0,
+    Math.min(100, Math.round(base * confidence + (status !== "Quiet" ? 8 : 0)))
+  );
 }
 
 export async function POST() {
   const now = Date.now();
-  const lastSync = getLastRedditSyncAt();
+  const lastSync = await getLastRedditSyncAt();
 
-  if (isRedditSyncInProgress()) {
+  if (await isRedditSyncInProgress()) {
     return NextResponse.json({
       ok: true,
       skipped: true,
@@ -143,15 +159,15 @@ export async function POST() {
   }
 
   try {
-    setRedditSyncInProgress(true);
+    await setRedditSyncInProgress(true);
 
     const freshEvents = await fetchRedditThreadEvents();
     const syncedAt = Date.now();
 
-    addEvents(freshEvents);
-    setLastRedditSyncAt(syncedAt);
+    await addEvents(freshEvents);
+    await setLastRedditSyncAt(syncedAt);
 
-    const allStoredEvents = getEvents();
+    const allStoredEvents = await getEvents();
 
     const aiResults: Array<{
       country: Country;
@@ -175,7 +191,9 @@ export async function POST() {
       let finalReason = "Not enough recent live signal comments.";
 
       if (signalEvents.length >= 2 && uniqueUsers >= 2) {
-        const commentsForAI = signalEvents.slice(0, 8).map((e) => `${e.author}: ${e.text}`);
+        const commentsForAI = signalEvents
+          .slice(0, 8)
+          .map((e) => `${e.author}: ${e.text}`);
 
         try {
           console.log("Calling Groq AI for", country, {
@@ -207,7 +225,7 @@ export async function POST() {
         }
       }
 
-      setAICountryState({
+      await setAICountryState({
         country,
         status: finalStatus,
         confidence: finalConfidence,
@@ -231,7 +249,6 @@ export async function POST() {
       });
     }
 
-    // Gulf 30-minute summary across Bahrain / Qatar / UAE / Dubai
     const gulfSummaryInput = {
       bahrain: getRecentCountrySignalEvents(allStoredEvents, "Bahrain", 30)
         .slice(0, 8)
@@ -250,7 +267,7 @@ export async function POST() {
     try {
       const summary = await summarizeGulfSituation(gulfSummaryInput);
 
-      setGulfSummary({
+      await setGulfSummary({
         headline: summary?.headline || "Gulf situation unclear",
         summary: summary?.summary || "No clear summary available.",
         regionalPattern:
@@ -268,7 +285,8 @@ export async function POST() {
       });
     } catch (err) {
       console.error("Gulf summary AI failed", err);
-      setGulfSummary({
+
+      await setGulfSummary({
         headline: "Gulf situation unclear",
         summary: "Summary generation failed.",
         regionalPattern: "unclear",
@@ -296,6 +314,6 @@ export async function POST() {
       { status: 500 }
     );
   } finally {
-    setRedditSyncInProgress(false);
+    await setRedditSyncInProgress(false);
   }
 }

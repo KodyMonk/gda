@@ -1,3 +1,4 @@
+import { Redis } from "@upstash/redis";
 import { CommentEvent, Country } from "./types";
 
 type StoredAIState = {
@@ -19,72 +20,145 @@ type GulfSummaryState = {
   updatedAt: number;
 };
 
-let events: CommentEvent[] = [];
-const seenIds = new Set<string>();
+type StoreShape = {
+  events: CommentEvent[];
+  seenIds: string[];
+  lastRedditSyncAt: number;
+  redditSyncInProgress: boolean;
+  aiStates: Partial<Record<Country, StoredAIState>>;
+  gulfSummary: GulfSummaryState | null;
+};
 
-let lastRedditSyncAt = 0;
-let redditSyncInProgress = false;
+const STORE_KEY = "gulf_attack_monitor_store";
 
-const aiStates: Partial<Record<Country, StoredAIState>> = {};
-let gulfSummary: GulfSummaryState | null = null;
+function getRedis() {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-export function getEvents(): CommentEvent[] {
-  return events;
+  if (!url || !token) {
+    throw new Error("Upstash Redis is not configured.");
+  }
+
+  return new Redis({ url, token });
 }
 
-export function addEvents(newEvents: CommentEvent[]) {
+function getDefaultStore(): StoreShape {
+  return {
+    events: [],
+    seenIds: [],
+    lastRedditSyncAt: 0,
+    redditSyncInProgress: false,
+    aiStates: {},
+    gulfSummary: null,
+  };
+}
+
+async function readStore(): Promise<StoreShape> {
+  const redis = getRedis();
+  const stored = await redis.get<StoreShape>(STORE_KEY);
+
+  if (!stored) return getDefaultStore();
+
+  return {
+    events: stored.events ?? [],
+    seenIds: stored.seenIds ?? [],
+    lastRedditSyncAt: stored.lastRedditSyncAt ?? 0,
+    redditSyncInProgress: stored.redditSyncInProgress ?? false,
+    aiStates: stored.aiStates ?? {},
+    gulfSummary: stored.gulfSummary ?? null,
+  };
+}
+
+async function writeStore(store: StoreShape) {
+  const redis = getRedis();
+  await redis.set(STORE_KEY, store);
+}
+
+export async function getEvents(): Promise<CommentEvent[]> {
+  const store = await readStore();
+  return store.events;
+}
+
+export async function addEvents(newEvents: CommentEvent[]) {
+  const store = await readStore();
+  const seenIds = new Set(store.seenIds);
+
   const deduped = newEvents.filter((e) => !seenIds.has(e.id));
 
   for (const event of deduped) {
     seenIds.add(event.id);
   }
 
-  events = [...deduped, ...events]
+  store.events = [...deduped, ...store.events]
     .sort((a, b) => {
       const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return bTime - aTime;
     })
     .slice(0, 1000);
+
+  store.seenIds = Array.from(seenIds).slice(-5000);
+
+  await writeStore(store);
 }
 
-export function clearEvents() {
-  events = [];
-  seenIds.clear();
+export async function clearEvents() {
+  const store = await readStore();
+  store.events = [];
+  store.seenIds = [];
+  await writeStore(store);
 }
 
-export function hasSeenEvent(id: string): boolean {
-  return seenIds.has(id);
+export async function hasSeenEvent(id: string): Promise<boolean> {
+  const store = await readStore();
+  return store.seenIds.includes(id);
 }
 
-export function getLastRedditSyncAt() {
-  return lastRedditSyncAt;
+export async function getLastRedditSyncAt(): Promise<number> {
+  const store = await readStore();
+  return store.lastRedditSyncAt;
 }
 
-export function setLastRedditSyncAt(timestamp: number) {
-  lastRedditSyncAt = timestamp;
+export async function setLastRedditSyncAt(timestamp: number) {
+  const store = await readStore();
+  store.lastRedditSyncAt = timestamp;
+  await writeStore(store);
 }
 
-export function isRedditSyncInProgress() {
-  return redditSyncInProgress;
+export async function isRedditSyncInProgress(): Promise<boolean> {
+  const store = await readStore();
+  return store.redditSyncInProgress;
 }
 
-export function setRedditSyncInProgress(value: boolean) {
-  redditSyncInProgress = value;
+export async function setRedditSyncInProgress(value: boolean) {
+  const store = await readStore();
+  store.redditSyncInProgress = value;
+  await writeStore(store);
 }
 
-export function setAICountryState(state: StoredAIState) {
-  aiStates[state.country] = state;
+export async function setAICountryState(state: StoredAIState) {
+  const store = await readStore();
+  store.aiStates[state.country] = state;
+  await writeStore(store);
 }
 
-export function getAICountryState(country: Country) {
-  return aiStates[country];
+export async function getAICountryState(country: Country): Promise<StoredAIState | undefined> {
+  const store = await readStore();
+  return store.aiStates[country];
 }
 
-export function setGulfSummary(summary: GulfSummaryState) {
-  gulfSummary = summary;
+export async function getAllAICountryStates(): Promise<Partial<Record<Country, StoredAIState>>> {
+  const store = await readStore();
+  return store.aiStates;
 }
 
-export function getGulfSummary() {
-  return gulfSummary;
+export async function setGulfSummary(summary: GulfSummaryState) {
+  const store = await readStore();
+  store.gulfSummary = summary;
+  await writeStore(store);
+}
+
+export async function getGulfSummary(): Promise<GulfSummaryState | null> {
+  const store = await readStore();
+  return store.gulfSummary;
 }

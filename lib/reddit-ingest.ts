@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { CommentEvent } from "./types";
 import { detectCountry, normalizeText } from "./utils";
-import { REDDIT_THREADS, getRedditJsonUrl } from "./reddit-config";
+import { getConfiguredRedditThreads } from "./thread-store";
+import { getRedditJsonUrl } from "./reddit-config";
 import { hasSeenEvent } from "./store";
 
 const STRONG_SENSORY_PHRASES = [
@@ -153,17 +154,26 @@ function isLikelyLiveAttackComment(body: string) {
 }
 
 export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
+  const threads = await getConfiguredRedditThreads();
   const allEvents: CommentEvent[] = [];
   const now = Date.now();
 
-  for (const thread of REDDIT_THREADS) {
+  for (const thread of threads) {
+    // skip blank or placeholder Saudi-type entries
+    if (!thread.url || thread.url.includes("REPLACE_WITH_")) {
+      console.warn(`Skipping invalid Reddit thread for ${thread.label}: ${thread.url}`);
+      continue;
+    }
+
     const jsonUrl = getRedditJsonUrl(thread.url);
 
     try {
+      console.log("Fetching Reddit thread:", thread.label, thread.url);
+
       const res = await fetch(jsonUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 GulfAttackMonitor/0.1",
-          "Accept": "application/json",
+          Accept: "application/json",
         },
         cache: "no-store",
       });
@@ -174,6 +184,12 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
         continue;
       }
 
+      if (res.status === 403) {
+        console.warn(`Failed Reddit fetch for ${thread.label}: 403`);
+        await sleep(1000);
+        continue;
+      }
+
       if (!res.ok) {
         console.warn(`Failed Reddit fetch for ${thread.label}: ${res.status}`);
         await sleep(800);
@@ -181,7 +197,9 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
       }
 
       const payload = await res.json();
+
       if (!Array.isArray(payload) || payload.length < 2) {
+        console.warn(`Unexpected Reddit payload for ${thread.label}`);
         await sleep(500);
         continue;
       }
@@ -205,7 +223,11 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
         .filter((x) => x.success)
         .map((x) => x.data)
         .sort((a, b) => (b.created_utc ?? 0) - (a.created_utc ?? 0))
-        .slice(0, 120); // don't process huge thread every time
+        .slice(0, 120);
+
+      console.log(`Parsed comments for ${thread.label}:`, parsedComments.length);
+
+      let acceptedForThread = 0;
 
       for (const c of parsedComments) {
         if (!isLikelyLiveAttackComment(c.body)) continue;
@@ -214,7 +236,8 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
         const minutesAgo = Math.max(0, Math.round((now - createdMs) / 60000));
 
         const inferredCountry = detectCountry(c.body);
-        const country = inferredCountry === "Unknown" ? thread.country : inferredCountry;
+        const country =
+          inferredCountry === "Unknown" ? thread.country : inferredCountry;
 
         const event: CommentEvent = {
           id: `reddit-${thread.key}-${c.id}`,
@@ -230,17 +253,22 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
           threadUrl: thread.url,
         };
 
-        if (!hasSeenEvent(event.id)) {
+        if (!(await hasSeenEvent(event.id))) {
           allEvents.push(event);
+          acceptedForThread += 1;
         }
       }
 
-      await sleep(1200); // important: slow down between threads
+      console.log(`Accepted events for ${thread.label}:`, acceptedForThread);
+
+      await sleep(1200);
     } catch (error) {
       console.error(`Reddit fetch crashed for ${thread.label}`, error);
       await sleep(1000);
     }
   }
+
+  console.log("Total events added this sync:", allEvents.length);
 
   return allEvents.sort((a, b) => {
     const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;

@@ -6,19 +6,19 @@ import {
   getGulfSummary,
 } from "@/lib/store";
 
-function computeBahrainRisk30() {
-  const bahrain = getAICountryState("Bahrain");
-  const qatar = getAICountryState("Qatar");
-  const uae = getAICountryState("UAE");
-  const dubai = getAICountryState("Dubai");
+function computeBahrainRisk30(input: {
+  bahrain: Awaited<ReturnType<typeof getAICountryState>>;
+  qatar: Awaited<ReturnType<typeof getAICountryState>>;
+  uae: Awaited<ReturnType<typeof getAICountryState>>;
+  dubai: Awaited<ReturnType<typeof getAICountryState>>;
+}) {
+  const { bahrain, qatar, uae, dubai } = input;
 
   let score = 0;
 
-  // Direct Bahrain status matters most
   if (bahrain?.status === "Being attacked") score += 70;
   else if (bahrain?.status === "Suspicious") score += 35;
 
-  // Regional cascade logic
   if (qatar?.status === "Being attacked") score += 12;
   else if (qatar?.status === "Suspicious") score += 6;
 
@@ -28,7 +28,6 @@ function computeBahrainRisk30() {
   if (dubai?.status === "Being attacked") score += 10;
   else if (dubai?.status === "Suspicious") score += 5;
 
-  // If multiple nearby countries show activity, Bahrain risk rises
   const activeRegionalCount = [qatar, uae, dubai].filter(
     (s) => s?.status === "Being attacked"
   ).length;
@@ -44,16 +43,21 @@ function computeBahrainRisk30() {
 }
 
 export async function GET() {
-  const events = getEvents();
-  const gulfSummary = getGulfSummary();
+  const events = await getEvents();
+  const gulfSummary = await getGulfSummary();
 
-  const bahrain = getAICountryState("Bahrain");
-  const qatar = getAICountryState("Qatar");
-  const uae = getAICountryState("UAE");
-  const saudi = getAICountryState("Saudi");
-  const dubai = getAICountryState("Dubai");
+  const bahrain = await getAICountryState("Bahrain");
+  const qatar = await getAICountryState("Qatar");
+  const uae = await getAICountryState("UAE");
+  const saudi = await getAICountryState("Saudi");
+  const dubai = await getAICountryState("Dubai");
 
-  const bahrainRisk30 = computeBahrainRisk30();
+  const bahrainRisk30 = computeBahrainRisk30({
+    bahrain,
+    qatar,
+    uae,
+    dubai,
+  });
 
   return NextResponse.json({
     countries: [
@@ -89,8 +93,10 @@ export async function GET() {
       },
     ],
     bahrainRisk30,
-    latestEvents: events.filter((event) => event.source === "reddit").slice(0, 50),
-    lastRedditSyncAt: getLastRedditSyncAt(),
+    latestEvents: events
+      .filter((event) => event.source === "reddit")
+      .slice(0, 50),
+    lastRedditSyncAt: await getLastRedditSyncAt(),
     gulfSummary,
   });
 }
