@@ -58,7 +58,7 @@ export async function fetchXFeedEvents(): Promise<CommentEvent[]> {
           id: `x-${feed.key}-${createdMs}-${index}`,
           source: "x",
           country: detectCountry(text),
-          author: `@${feed.username}`,
+          author: feed.handle,
           text,
           minutesAgo: index,
           createdAt: new Date(createdMs).toISOString(),
