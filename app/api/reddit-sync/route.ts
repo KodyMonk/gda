@@ -16,34 +16,87 @@ import { CommentEvent, Country } from "@/lib/types";
 const MIN_SYNC_INTERVAL_MS = 60_000;
 const COUNTRIES: Country[] = ["Bahrain", "Qatar", "UAE", "Dubai", "Saudi"];
 
-const STRONG_SIGNALS = [
-  "siren",
-  "sirens",
-  "boom",
-  "booms",
-  "loud boom",
-  "loud booms",
-  "thud",
-  "thuds",
+const STRONG_SENSORY_PHRASES = [
   "loud thud",
-  "explosion",
-  "explosions",
-  "interception",
-  "intercepted",
+  "big thud",
   "heard it",
   "heard that",
-  "heard loud",
-  "heard booms",
   "heard boom",
-  "windows shook",
-  "window shook",
-  "wuuuush",
+  "heard booms",
+  "heard a boom",
+  "heard explosions",
+  "multiple explosions",
+  "loud boom",
+  "loud booms",
+  "boom",
+  "booms",
+  "thud",
+  "thuds",
+  "blast",
+  "blasts",
+  "explosion",
+  "explosions",
+  "siren",
+  "sirens",
+  "interception overhead",
+  "intercepted overhead",
+  "intercept",
+  "interception",
+  "intercepted",
   "whoosh",
-  "shake",
-  "shaking",
+  "wuuush",
+  "window shook",
+  "windows shook",
+  "house shook",
+  "building shook",
+  "shaking now",
+  "just heard",
 ];
 
-const PAST_OR_IRRELEVANT = [
+const WEAK_SENSORY_WORDS = [
+  "heard",
+  "loud",
+  "sound",
+  "sounds",
+  "shook",
+  "shaking",
+  "interception",
+  "intercepted",
+  "intercept",
+  "boom",
+  "thud",
+  "blast",
+  "explosion",
+  "sirens",
+  "siren",
+  "whoosh",
+  "wuuush",
+];
+
+const LIVE_CONTEXT_WORDS = [
+  "just now",
+  "right now",
+  "now",
+  "outside",
+  "overhead",
+  "above us",
+  "in manama",
+  "in muharraq",
+  "in juffair",
+  "in doha",
+  "in dubai",
+  "in abu dhabi",
+  "anyone else",
+  "did you hear",
+  "can hear",
+  "i heard",
+  "we heard",
+  "im here",
+  "i'm here",
+  "here in",
+];
+
+const EXCLUSION_PHRASES = [
   "last night",
   "yesterday",
   "earlier",
@@ -64,14 +117,30 @@ function normalizeText(s: string) {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function isPastOrIrrelevant(text: string) {
-  const lower = normalizeText(text);
-  return PAST_OR_IRRELEVANT.some((term) => lower.includes(term));
+function hasAny(text: string, phrases: string[]) {
+  return phrases.some((phrase) => text.includes(normalizeText(phrase)));
 }
 
-function hasSignal(text: string) {
+function countMatches(text: string, phrases: string[]) {
+  return phrases.filter((phrase) => text.includes(normalizeText(phrase))).length;
+}
+
+function isLikelyLiveSignalComment(text: string) {
   const lower = normalizeText(text);
-  return STRONG_SIGNALS.some((term) => lower.includes(term));
+
+  if (!lower || lower === "[deleted]" || lower === "[removed]") return false;
+  if (lower.length < 3) return false;
+  if (hasAny(lower, EXCLUSION_PHRASES)) return false;
+
+  const hasStrong = hasAny(lower, STRONG_SENSORY_PHRASES);
+  const weakCount = countMatches(lower, WEAK_SENSORY_WORDS);
+  const hasLiveContext = hasAny(lower, LIVE_CONTEXT_WORDS);
+
+  if (hasStrong) return true;
+  if (weakCount >= 2 && hasLiveContext) return true;
+  if (weakCount >= 3) return true;
+
+  return false;
 }
 
 function getRecentCountryEvents(
@@ -99,8 +168,7 @@ function getRecentCountrySignalEvents(
 ) {
   return getRecentCountryEvents(events, country, minutes).filter((event) => {
     if (!event.text) return false;
-    if (isPastOrIrrelevant(event.text)) return false;
-    return hasSignal(event.text);
+    return isLikelyLiveSignalComment(event.text);
   });
 }
 
@@ -223,6 +291,11 @@ export async function POST() {
           finalScore = 50;
           finalReason = "AI classification failed; using fallback suspicious state.";
         }
+      } else if (signalEvents.length >= 1) {
+        finalStatus = "Suspicious";
+        finalConfidence = "Low";
+        finalScore = 20;
+        finalReason = "Single recent live signal comment detected.";
       }
 
       await setAICountryState({
