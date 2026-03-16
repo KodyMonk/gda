@@ -203,6 +203,61 @@ function scoreFromAI(
   );
 }
 
+function getCountryFallbackState(
+  country: Country,
+  signalEvents: CommentEvent[],
+  uniqueUsers: number
+) {
+  const signalCount = signalEvents.length;
+
+  let status: "Quiet" | "Suspicious" | "Being attacked" = "Quiet";
+  let confidence: "Low" | "Medium" | "High" = "Low";
+  let score = 10;
+  let reason = "Not enough recent live signal comments.";
+
+  if (country === "Bahrain") {
+    if (signalCount >= 1) {
+      status = "Suspicious";
+      confidence = "Low";
+      score = 22;
+      reason = "Single recent Bahrain live signal comment detected.";
+    }
+
+    if (signalCount >= 2) {
+      status = "Suspicious";
+      confidence = uniqueUsers >= 2 ? "Medium" : "Low";
+      score = uniqueUsers >= 2 ? 38 : 28;
+      reason =
+        uniqueUsers >= 2
+          ? "Multiple recent Bahrain live signal comments detected."
+          : "Multiple Bahrain live signal comments detected but from limited users.";
+    }
+
+    if (signalCount >= 3 && uniqueUsers >= 2) {
+      status = "Suspicious";
+      confidence = "Medium";
+      score = 48;
+      reason = "Clustered Bahrain live signal comments detected.";
+    }
+  } else {
+    if (signalCount >= 1) {
+      status = "Suspicious";
+      confidence = "Low";
+      score = 18;
+      reason = "Single recent live signal comment detected.";
+    }
+
+    if (signalCount >= 2 && uniqueUsers >= 2) {
+      status = "Suspicious";
+      confidence = "Medium";
+      score = 35;
+      reason = "Multiple recent live signal comments detected.";
+    }
+  }
+
+  return { status, confidence, score, reason };
+}
+
 export async function POST() {
   const now = Date.now();
   const lastSync = await getLastRedditSyncAt();
@@ -253,12 +308,19 @@ export async function POST() {
       const signalEvents = getRecentCountrySignalEvents(allStoredEvents, country, 20);
       const uniqueUsers = new Set(signalEvents.map((e) => e.author)).size;
 
-      let finalStatus: "Quiet" | "Suspicious" | "Being attacked" = "Quiet";
-      let finalConfidence: "Low" | "Medium" | "High" = "Low";
-      let finalScore = 10;
-      let finalReason = "Not enough recent live signal comments.";
+      const fallback = getCountryFallbackState(country, signalEvents, uniqueUsers);
 
-      if (signalEvents.length >= 2 && uniqueUsers >= 2) {
+      let finalStatus: "Quiet" | "Suspicious" | "Being attacked" = fallback.status;
+      let finalConfidence: "Low" | "Medium" | "High" = fallback.confidence;
+      let finalScore = fallback.score;
+      let finalReason = fallback.reason;
+
+      const shouldUseAI =
+        country === "Bahrain"
+          ? signalEvents.length >= 2
+          : signalEvents.length >= 2 && uniqueUsers >= 2;
+
+      if (shouldUseAI) {
         const commentsForAI = signalEvents
           .slice(0, 8)
           .map((e) => `${e.author}: ${e.text}`);
@@ -277,25 +339,27 @@ export async function POST() {
           const confidenceNumber =
             typeof ai?.confidence === "number" ? ai.confidence : 0.5;
 
-          finalStatus = mappedStatus;
+          finalStatus = mapAIStatus(ai?.status);
           finalConfidence = mapAIConfidence(confidenceNumber);
           finalScore = scoreFromAI(mappedStatus, confidenceNumber);
           finalReason =
             typeof ai?.reason === "string" && ai.reason.trim()
               ? ai.reason
               : "AI returned no reason.";
+
+          // Keep Bahrain from dropping unrealistically low if AI is too cautious
+          if (country === "Bahrain" && signalEvents.length >= 1) {
+            finalScore = Math.max(finalScore, 25);
+            if (finalStatus === "Quiet") finalStatus = "Suspicious";
+            if (finalConfidence === "Low") finalConfidence = "Low";
+          }
         } catch (err) {
           console.error(`AI classification failed for ${country}`, err);
-          finalStatus = "Suspicious";
-          finalConfidence = "Medium";
-          finalScore = 50;
-          finalReason = "AI classification failed; using fallback suspicious state.";
+          finalStatus = fallback.status;
+          finalConfidence = fallback.confidence;
+          finalScore = fallback.score;
+          finalReason = `${fallback.reason} AI classification failed, using fallback.`;
         }
-      } else if (signalEvents.length >= 1) {
-        finalStatus = "Suspicious";
-        finalConfidence = "Low";
-        finalScore = 20;
-        finalReason = "Single recent live signal comment detected.";
       }
 
       await setAICountryState({
