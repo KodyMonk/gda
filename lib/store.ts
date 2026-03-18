@@ -25,6 +25,7 @@ type StoreShape = {
   seenIds: string[];
   lastRedditSyncAt: number;
   redditSyncInProgress: boolean;
+  redditSyncStartedAt: number;
   aiStates: Partial<Record<Country, StoredAIState>>;
   gulfSummary: GulfSummaryState | null;
 };
@@ -48,6 +49,7 @@ function getDefaultStore(): StoreShape {
     seenIds: [],
     lastRedditSyncAt: 0,
     redditSyncInProgress: false,
+    redditSyncStartedAt: 0,
     aiStates: {},
     gulfSummary: null,
   };
@@ -64,6 +66,7 @@ async function readStore(): Promise<StoreShape> {
     seenIds: stored.seenIds ?? [],
     lastRedditSyncAt: stored.lastRedditSyncAt ?? 0,
     redditSyncInProgress: stored.redditSyncInProgress ?? false,
+    redditSyncStartedAt: stored.redditSyncStartedAt ?? 0,
     aiStates: stored.aiStates ?? {},
     gulfSummary: stored.gulfSummary ?? null,
   };
@@ -130,9 +133,22 @@ export async function isRedditSyncInProgress(): Promise<boolean> {
   return store.redditSyncInProgress;
 }
 
+export async function getRedditSyncStartedAt(): Promise<number> {
+  const store = await readStore();
+  return store.redditSyncStartedAt;
+}
+
 export async function setRedditSyncInProgress(value: boolean) {
   const store = await readStore();
   store.redditSyncInProgress = value;
+  store.redditSyncStartedAt = value ? Date.now() : 0;
+  await writeStore(store);
+}
+
+export async function forceClearRedditSyncLock() {
+  const store = await readStore();
+  store.redditSyncInProgress = false;
+  store.redditSyncStartedAt = 0;
   await writeStore(store);
 }
 
@@ -142,12 +158,16 @@ export async function setAICountryState(state: StoredAIState) {
   await writeStore(store);
 }
 
-export async function getAICountryState(country: Country): Promise<StoredAIState | undefined> {
+export async function getAICountryState(
+  country: Country
+): Promise<StoredAIState | undefined> {
   const store = await readStore();
   return store.aiStates[country];
 }
 
-export async function getAllAICountryStates(): Promise<Partial<Record<Country, StoredAIState>>> {
+export async function getAllAICountryStates(): Promise<
+  Partial<Record<Country, StoredAIState>>
+> {
   const store = await readStore();
   return store.aiStates;
 }

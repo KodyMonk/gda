@@ -3,8 +3,10 @@ import { fetchRedditThreadEvents } from "@/lib/reddit-ingest";
 import { classifySignal, summarizeGulfSituation } from "@/lib/ai-classifier";
 import {
   addEvents,
+  forceClearRedditSyncLock,
   getEvents,
   getLastRedditSyncAt,
+  getRedditSyncStartedAt,
   isRedditSyncInProgress,
   setAICountryState,
   setGulfSummary,
@@ -14,6 +16,7 @@ import {
 import { CommentEvent, Country } from "@/lib/types";
 
 const MIN_SYNC_INTERVAL_MS = 60_000;
+const STALE_SYNC_LOCK_MS = 120_000;
 const COUNTRIES: Country[] = ["Bahrain", "Qatar", "UAE", "Dubai", "Saudi"];
 
 const STRONG_SENSORY_PHRASES = [
@@ -261,14 +264,27 @@ function getCountryFallbackState(
 export async function POST() {
   const now = Date.now();
   const lastSync = await getLastRedditSyncAt();
+  const syncInProgress = await isRedditSyncInProgress();
+  const syncStartedAt = await getRedditSyncStartedAt();
 
-  if (await isRedditSyncInProgress()) {
-    return NextResponse.json({
-      ok: true,
-      skipped: true,
-      reason: "sync already in progress",
-      lastSync,
-    });
+  if (syncInProgress) {
+    const lockAge = syncStartedAt ? now - syncStartedAt : now - lastSync;
+
+    if (lockAge > STALE_SYNC_LOCK_MS) {
+      console.warn("Clearing stale reddit sync lock", {
+        syncStartedAt,
+        lastSync,
+        lockAge,
+      });
+      await forceClearRedditSyncLock();
+    } else {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: "sync already in progress",
+        lastSync,
+      });
+    }
   }
 
   if (now - lastSync < MIN_SYNC_INTERVAL_MS) {
@@ -339,7 +355,7 @@ export async function POST() {
           const confidenceNumber =
             typeof ai?.confidence === "number" ? ai.confidence : 0.5;
 
-          finalStatus = mapAIStatus(ai?.status);
+          finalStatus = mappedStatus;
           finalConfidence = mapAIConfidence(confidenceNumber);
           finalScore = scoreFromAI(mappedStatus, confidenceNumber);
           finalReason =
@@ -347,11 +363,9 @@ export async function POST() {
               ? ai.reason
               : "AI returned no reason.";
 
-          // Keep Bahrain from dropping unrealistically low if AI is too cautious
           if (country === "Bahrain" && signalEvents.length >= 1) {
             finalScore = Math.max(finalScore, 25);
             if (finalStatus === "Quiet") finalStatus = "Suspicious";
-            if (finalConfidence === "Low") finalConfidence = "Low";
           }
         } catch (err) {
           console.error(`AI classification failed for ${country}`, err);
@@ -451,6 +465,6 @@ export async function POST() {
       { status: 500 }
     );
   } finally {
-    await setRedditSyncInProgress(false);
+    await forceClearRedditSyncLock();
   }
 }

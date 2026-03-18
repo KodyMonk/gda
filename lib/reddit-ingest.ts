@@ -108,11 +108,33 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function flattenComments(children: any[], out: any[] = []) {
+type RedditCommentNode = {
+  kind?: string;
+  data?: {
+    id?: string;
+    author?: string;
+    body?: string;
+    ups?: number;
+    created_utc?: number;
+    replies?: {
+      data?: {
+        children?: RedditCommentNode[];
+      };
+    };
+  };
+};
+
+type FlatRedditComment = NonNullable<RedditCommentNode["data"]>;
+
+function flattenComments(
+  children: RedditCommentNode[],
+  out: FlatRedditComment[] = []
+) {
   for (const child of children ?? []) {
     if (!child || child.kind !== "t1") continue;
 
     const data = child.data;
+    if (!data) continue;
     out.push(data);
 
     const repliesChildren =
@@ -171,12 +193,12 @@ export async function fetchRedditThreadEvents(): Promise<CommentEvent[]> {
       console.log("Fetching Reddit thread:", thread.label, thread.url);
 
       const res = await fetch(jsonUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 GulfAttackMonitor/0.1",
-          Accept: "application/json",
-        },
-        cache: "no-store",
-      });
+  headers: {
+    "User-Agent": "web:gulf-attack-dashboard:1.0 (by /u/Alternative_Offer626)",
+    "Accept": "application/json",
+  },
+  cache: "no-store",
+});
 
       if (res.status === 429) {
         console.warn(`Failed Reddit fetch for ${thread.label}: 429`);
